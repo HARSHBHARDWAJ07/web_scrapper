@@ -1,214 +1,251 @@
-const express = require("express");
-const axios = require("axios");
-const { Buffer } = require("buffer");
-const app = express();
-app.use(express.json());
+import { ApifyClient } from 'apify-client';
 
-const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN || "REPLACE_WITH_YOUR_APIFY_TOKEN";
-const APIFY_BASE_URL = process.env.APIFY_BASE_URL || "https://api.apify.com/v2";
-
-// Helper: Apify Auth Header
-function getAuthHeader() {
-  return `Bearer ${APIFY_API_TOKEN}`;
-}
-
-// --------------------
-// Scraper Function
-// --------------------
-async function scrapeInstagramPosts(username) {
-  if (!APIFY_API_TOKEN || APIFY_API_TOKEN === "REPLACE_WITH_YOUR_APIFY_TOKEN") {
-    throw new Error("APIFY_API_TOKEN is not set");
-  }
-
-  const cleanUsername = String(username).replace("@", "").trim();
-  if (!cleanUsername) {
-    throw new Error("Invalid username");
-  }
-
-  const profileUrl = `https://www.instagram.com/${cleanUsername}/`;
-
-  let extractResp;
-  try {
-    // Using Apify's Web Scraper actor for browser rendering
-    extractResp = await axios.post(
-      `${APIFY_BASE_URL}/acts/apify~web-scraper/runs?token=${APIFY_API_TOKEN}`,
-      {
-        startUrls: [{ url: profileUrl }],
-        globs: [],
-        pseudoUrls: [],
-        pageFunction: `async function pageFunction(context) {
-          const { page } = context;
-          await page.waitForTimeout(3000);
-          const html = await page.content();
-          return { html: html };
-        }`,
-        proxyConfiguration: { useApifyProxy: true },
-        initialCookies: [],
-        waitUntil: ["networkidle2"],
-        debugLog: false,
-        ignoreSslErrors: false,
-        ignoreCorsAndCsp: false,
-        downloadMedia: false,
-        downloadCss: false,
-        maxRequestRetries: 1,
-        maxPagesPerCrawl: 1,
-        maxResultsPerCrawl: 1,
-        maxCrawlingDepth: 0,
-        maxConcurrency: 1,
-        pageLoadTimeoutSecs: 15,
-        pageFunctionTimeoutSecs: 15,
-        maxScrollHeightPixels: 5000,
-        useChrome: true,
-        useStealth: true
-      },
-      {
-        headers: {
-          Authorization: getAuthHeader(),
-          "Content-Type": "application/json",
-        },
-        timeout: 20000, // 20 second timeout
-      }
-    );
-
-    // Get run details to find the correct dataset ID
-    const runId = extractResp.data.data.id;
-    const defaultDatasetId = extractResp.data.data.defaultDatasetId;
-    
-    let runStatus = 'RUNNING';
-    let attempts = 0;
-    const maxAttempts = 4; // 20 seconds total (5 seconds * 4 attempts)
-    const startTime = Date.now();
-    
-    while (runStatus === 'RUNNING' && attempts < maxAttempts) {
-      // Check if we've exceeded 20 seconds
-      if (Date.now() - startTime > 20000) {
-        throw new Error("Request timeout: exceeded 20 second limit");
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-      
-      const statusResp = await axios.get(
-        `${APIFY_BASE_URL}/actor-runs/${runId}?token=${APIFY_API_TOKEN}`,
-        {
-          headers: {
-            Authorization: getAuthHeader(),
-          },
-          timeout: 5000
-        }
-      );
-      
-      runStatus = statusResp.data.data.status;
-      attempts++;
+/**
+ * Ultra-optimized Instagram Scraper for Single User
+ * Extracts ONLY: title, caption, hashtags
+ * Optimized for maximum speed with minimal data transfer
+ */
+class FastInstagramScraper {
+    constructor(apiToken) {
+        this.client = new ApifyClient({ token: apiToken });
     }
 
-    // If still running after 20 seconds, try to get partial results
-    if (runStatus === 'RUNNING') {
-      console.log("Run still running after 20s, attempting to get partial results");
-    }
+    /**
+     * Main method - Gets posts with only title, caption, hashtags
+     * @param {string} username - Instagram username (without @)
+     * @param {number} maxPosts - Maximum posts to fetch (default: 12)
+     * @returns {Promise<Object>} Structured post data
+     */
+    async getPostDetails(username, maxPosts = 12) {
+        // Sanitize username
+        const cleanUsername = username.replace('@', '').trim().toLowerCase();
+        
+        // Optimized Apify configuration for minimal data
+        const input = {
+            // Direct URL for fastest access
+            directUrls: [`https://www.instagram.com/${cleanUsername}/`],
+            
+            // Essential configuration
+            resultsType: "posts",
+            resultsLimit: maxPosts,
+            searchType: "user",
+            searchLimit: 1,
+            
+            // Disable all unnecessary data to maximize speed
+            addParentData: false,
+            includeRelatedProfiles: false,
+            expandOwners: false,
+            
+            // Custom extender to extract ONLY what we need
+            extendOutputFunction: `async ({ data, item, itemSpec, page, request, customData }) => {
+                // Only process if it's a post
+                if (item.type !== 'Post') return null;
+                
+                // Extract hashtags efficiently
+                const caption = item.caption || '';
+                const hashtagRegex = /#[\\w\\u0590-\\u05ff]+/g;
+                const hashtags = caption.match(hashtagRegex) || [];
+                
+                // Return ONLY required fields
+                return {
+                    title: item.title || caption.substring(0, 50) || 'No title',
+                    caption: caption,
+                    hashtags: [...new Set(hashtags)] // Remove duplicates
+                };
+            }`,
+            
+            // Proxy configuration for reliability
+            proxy: {
+                useApifyProxy: true,
+                apifyProxyGroups: ["RESIDENTIAL"],
+                apifyProxyCountry: "US"
+            },
+            
+            // Performance settings
+            maxRequestRetries: 1,  // Minimal retries for speed
+            maxRequestsPerCrawl: 50,
+            maxConcurrency: 5,
+            pageTimeout: 20,
+            
+            // Minimal fields to fetch
+            fields: ["caption", "title", "type"]
+        };
 
-    // Use the correct dataset ID from the run
-    const datasetId = defaultDatasetId || runId;
-    
-    // Get the results using the correct dataset ID
-    const resultsResp = await axios.get(
-      `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${APIFY_API_TOKEN}`,
-      {
-        headers: {
-          Authorization: getAuthHeader(),
-        },
-        timeout: 5000
-      }
-    );
-
-    const results = resultsResp.data;
-    if (!results || results.length === 0) {
-      return [];
-    }
-
-    const html = results[0].html || '';
-    
-    if (!html) {
-      return [];
-    }
-
-    // Parse Instagram's embedded JSON (_sharedData fallback) - same as original
-    let posts = [];
-    try {
-      const m = html.match(/window\._sharedData\s*=\s*(\{.*?\});/s);
-      if (m) {
-        const obj = JSON.parse(m[1]);
-        const edges =
-          obj.entry_data?.ProfilePage?.[0]?.graphql?.user?.edge_owner_to_timeline_media?.edges;
-        if (Array.isArray(edges)) {
-          posts = edges.map((edge, idx) => {
-            const node = edge.node || {};
-            const captionEdge = node.edge_media_to_caption?.edges;
-            const caption =
-              (Array.isArray(captionEdge) && captionEdge[0]?.node?.text) || "";
-            const title = caption
-              ? caption.split("\n")[0].substring(0, 100).trim()
-              : `Post ${idx + 1}`;
-            const hashtags =
-              (caption.match(/#([A-Za-z0-9_]+)/g) || []).map((h) => h.substring(1));
-            const shortcode = node.shortcode;
-            const postUrl = shortcode
-              ? `https://www.instagram.com/p/${shortcode}/`
-              : "";
+        try {
+            const startTime = Date.now();
+            
+            // Run the scraper
+            const run = await this.client.actor("apify/instagram-scraper").call(input);
+            
+            // Get results
+            const { items } = await this.client.dataset(run.defaultDatasetId).listItems();
+            
+            // Process and structure the minimal data
+            const posts = this.processMinimalData(items);
+            
+            const endTime = Date.now();
+            
             return {
-              title,
-              url: postUrl,
-              caption,
-              hashtags,
+                status: 'success',
+                username: cleanUsername,
+                postCount: posts.length,
+                posts: posts,
+                executionTime: `${(endTime - startTime) / 1000}s`
             };
-          });
+            
+        } catch (error) {
+            return {
+                status: 'error',
+                username: cleanUsername,
+                error: error.message,
+                posts: []
+            };
         }
-      }
-    } catch (parseErr) {
-      console.error("Error parsing Instagram HTML:", parseErr);
     }
 
-    return posts;
-
-  } catch (err) {
-    const resp = err.response;
-    if (resp) {
-      throw new Error(
-        `Apify extract error: status ${resp.status}, data = ${JSON.stringify(resp.data)}`
-      );
+    /**
+     * Process data with minimal overhead
+     * @param {Array} items - Raw items from Apify
+     * @returns {Array} Processed posts with only required fields
+     */
+    processMinimalData(items) {
+        const posts = [];
+        const seen = new Set(); // Deduplication
+        
+        for (const item of items) {
+            // Skip if not a post or already processed
+            if (!item || seen.has(item.shortCode)) continue;
+            
+            seen.add(item.shortCode);
+            
+            // Extract only what we need
+            const caption = item.caption || '';
+            const hashtags = this.extractHashtags(caption);
+            
+            posts.push({
+                title: item.title || this.generateTitle(caption) || 'Untitled Post',
+                caption: caption,
+                hashtags: hashtags
+            });
+        }
+        
+        return posts;
     }
-    throw new Error(`Apify extract network error: ${err.message}`);
-  }
+
+    /**
+     * Extract hashtags with optimized regex
+     * @param {string} text - Text to extract hashtags from
+     * @returns {Array} Array of unique hashtags
+     */
+    extractHashtags(text) {
+        if (!text) return [];
+        
+        // Optimized regex for hashtags (including Unicode support)
+        const hashtags = text.match(/#[\w\u0590-\u05ff]+/g) || [];
+        
+        // Remove duplicates and return
+        return [...new Set(hashtags)];
+    }
+
+    /**
+     * Generate a title from caption if not available
+     * @param {string} caption - Post caption
+     * @returns {string} Generated title
+     */
+    generateTitle(caption) {
+        if (!caption) return '';
+        
+        // Take first sentence or first 50 characters
+        const firstSentence = caption.split(/[.!?]/)[0];
+        if (firstSentence.length <= 50) {
+            return firstSentence.trim();
+        }
+        
+        // Truncate at word boundary
+        return caption.substring(0, 50).replace(/\s+\S*$/, '') + '...';
+    }
 }
 
-// --------------------
-// Express Routes
-// --------------------
-app.post("/", async (req, res) => {
-  try {
-    const { username } = req.body;
-    if (!username) {
-      return res.status(400).json({ status: "error", message: "Username is required" });
+/**
+ * Simplified async wrapper for immediate use
+ */
+async function getInstagramPosts(username, apiToken, maxPosts = 12) {
+    const scraper = new FastInstagramScraper(apiToken);
+    return await scraper.getPostDetails(username, maxPosts);
+}
+
+// ============================================
+// USAGE EXAMPLE
+// ============================================
+
+async function example() {
+    const API_TOKEN = 'YOUR_APIFY_API_TOKEN'; // Replace with your token
+    const USERNAME = 'kirannydvvv'; // Single username
+    const MAX_POSTS = 12; // Number of posts to fetch
+    
+    console.log(`Fetching posts for @${USERNAME}...`);
+    
+    const scraper = new FastInstagramScraper(API_TOKEN);
+    const result = await scraper.getPostDetails(USERNAME, MAX_POSTS);
+    
+    if (result.status === 'success') {
+        console.log(`✓ Fetched ${result.postCount} posts in ${result.executionTime}`);
+        console.log('\nSample Output:');
+        
+        // Display first 3 posts as example
+        result.posts.slice(0, 3).forEach((post, index) => {
+            console.log(`\n--- Post ${index + 1} ---`);
+            console.log('Title:', post.title);
+            console.log('Caption:', post.caption.substring(0, 100) + '...');
+            console.log('Hashtags:', post.hashtags.join(', '));
+        });
+    } else {
+        console.error('✗ Error:', result.error);
     }
+}
 
-    const posts = await scrapeInstagramPosts(username);
-    return res.status(200).json({
-      status: "success",
-      data: { username, posts },
-    });
-  } catch (err) {
-    console.error("Handler error:", err);
-    return res.status(500).json({ status: "error", message: err.message });
-  }
-});
+// ============================================
+// EVEN SIMPLER - ONE-LINER FUNCTION
+// ============================================
 
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
+/**
+ * One-line function for absolute simplicity
+ * @example
+ * const posts = await quickGetPosts('username', 'YOUR_TOKEN');
+ */
+async function quickGetPosts(username, apiToken, maxPosts = 12) {
+    try {
+        const client = new ApifyClient({ token: apiToken });
+        
+        const run = await client.actor("apify/instagram-scraper").call({
+            directUrls: [`https://www.instagram.com/${username}/`],
+            resultsType: "posts",
+            resultsLimit: maxPosts,
+            proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] }
+        });
+        
+        const { items } = await client.dataset(run.defaultDatasetId).listItems();
+        
+        return items.map(item => ({
+            title: item.title || item.caption?.substring(0, 50) || 'No title',
+            caption: item.caption || '',
+            hashtags: (item.caption?.match(/#[\w]+/g) || []).filter((v, i, a) => a.indexOf(v) === i)
+        }));
+        
+    } catch (error) {
+        console.error('Error:', error.message);
+        return [];
+    }
+}
 
-// --------------------
-// Start Server
-// --------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Scraper running on port ${PORT}`);
-});
+// Export all functions
+export { 
+    FastInstagramScraper, 
+    getInstagramPosts, 
+    quickGetPosts 
+};
+
+// Run example if executed directly
+if (require.main === module) {
+    example();
+}
