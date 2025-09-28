@@ -91,18 +91,35 @@ async function scrapeInstagramPosts(username) {
 }
 
 // API endpoint
+// … (imports and helper functions remain same) …
+
 app.post("/", async (req, res) => {
   try {
     const { username } = req.body || {};
-    if (!username) return res.status(400).json({ error: "Username is required" });
+    if (!username) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Username is required" });
+    }
 
     const posts = await scrapeInstagramPosts(username);
-    res.json({ posts, status: 200 });
+
+    // Send success format
+    return res.status(200).json({
+      status: "success",
+      data: {
+        username,
+        posts
+      }
+    });
   } catch (err) {
-    console.error("Error:", err.message);
-    res.status(500).json({ error: err.message, status: 500 });
+    console.error("Error:", err);
+    return res
+      .status(500)
+      .json({ status: "error", message: err.message || "Internal Error" });
   }
 });
+
 
 // Start server (Render will use process.env.PORT)
 const PORT = process.env.PORT || 3000;
