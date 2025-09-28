@@ -11,8 +11,8 @@ const CONFIG = {
   PORT: process.env.PORT || 3000,
   CACHE_TTL: 15 * 60, // 15 minutes cache
   MAX_POSTS: 100,
-  REQUEST_TIMEOUT: 10000, // 10 seconds (local guard for page timeouts)
-  ACTOR_TIMEOUT: 120_000, // 2 minutes actor-level timeout
+  REQUEST_TIMEOUT: 10000, // 10 seconds (local guard for page requests)
+  ACTOR_TIMEOUT: 120_000, // 2 minutes local guard
   RATE_LIMIT_PER_HOUR: 100, // requests per hour (global)
 };
 
@@ -115,12 +115,14 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
   const postsLimit = Math.min(Math.max(1, Number(maxPosts) || 10), CONFIG.MAX_POSTS);
   const cacheKey = `instagram:${normalized.toLowerCase()}:${postsLimit}`;
 
+  // cache hit
   const cached = cache.get(cacheKey);
   if (cached) {
     console.log(`✅ Cache hit (${cacheKey})`);
     return cached;
   }
 
+  // rate limit check
   if (!RateLimiterSimple.tryRemoveTokens(1)) {
     const tokensLeft = RateLimiterSimple.getTokensLeft();
     console.warn(`⚠️ Rate limit exceeded. tokensLeft=${tokensLeft}`);
@@ -157,9 +159,8 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
   };
 
   try {
-    const run = await client.actor("apify/instagram-scraper").call(input, {
-      waitForFinish: CONFIG.ACTOR_TIMEOUT / 1000, // convert ms → seconds
-    });
+    // call actor and wait until finished
+    const run = await client.actor("apify/instagram-scraper").call(input);
 
     const datasetResult = await client.dataset(run.defaultDatasetId).listItems({
       limit: postsLimit,
