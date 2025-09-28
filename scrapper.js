@@ -89,7 +89,7 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
 }
 
 // API route
-app.post("/scrape", async (req, res) => {
+app.post("/", async (req, res) => {
   try {
     const { username, maxPosts } = req.body;
     if (!username) {
