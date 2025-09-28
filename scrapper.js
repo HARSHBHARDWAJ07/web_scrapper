@@ -50,13 +50,13 @@ async function scrapeInstagramPosts(username) {
         ignoreCorsAndCsp: false,
         downloadMedia: false,
         downloadCss: false,
-        maxRequestRetries: 3,
+        maxRequestRetries: 1,
         maxPagesPerCrawl: 1,
         maxResultsPerCrawl: 1,
         maxCrawlingDepth: 0,
         maxConcurrency: 1,
-        pageLoadTimeoutSecs: 60,
-        pageFunctionTimeoutSecs: 60,
+        pageLoadTimeoutSecs: 15,
+        pageFunctionTimeoutSecs: 15,
         maxScrollHeightPixels: 5000,
         useChrome: true,
         useStealth: true
@@ -66,17 +66,25 @@ async function scrapeInstagramPosts(username) {
           Authorization: getAuthHeader(),
           "Content-Type": "application/json",
         },
-        timeout: 60000,
+        timeout: 20000, // 20 second timeout
       }
     );
 
-    // Wait for the run to complete
+    // Get run details to find the correct dataset ID
     const runId = extractResp.data.data.id;
+    const defaultDatasetId = extractResp.data.data.defaultDatasetId;
+    
     let runStatus = 'RUNNING';
     let attempts = 0;
-    const maxAttempts = 60; // 5 minutes timeout
+    const maxAttempts = 4; // 20 seconds total (5 seconds * 4 attempts)
+    const startTime = Date.now();
     
     while (runStatus === 'RUNNING' && attempts < maxAttempts) {
+      // Check if we've exceeded 20 seconds
+      if (Date.now() - startTime > 20000) {
+        throw new Error("Request timeout: exceeded 20 second limit");
+      }
+      
       await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
       
       const statusResp = await axios.get(
@@ -84,7 +92,8 @@ async function scrapeInstagramPosts(username) {
         {
           headers: {
             Authorization: getAuthHeader(),
-          }
+          },
+          timeout: 5000
         }
       );
       
@@ -92,17 +101,22 @@ async function scrapeInstagramPosts(username) {
       attempts++;
     }
 
-    if (runStatus !== 'SUCCEEDED') {
-      throw new Error(`Apify run failed with status: ${runStatus}`);
+    // If still running after 20 seconds, try to get partial results
+    if (runStatus === 'RUNNING') {
+      console.log("Run still running after 20s, attempting to get partial results");
     }
 
-    // Get the results
+    // Use the correct dataset ID from the run
+    const datasetId = defaultDatasetId || runId;
+    
+    // Get the results using the correct dataset ID
     const resultsResp = await axios.get(
-      `${APIFY_BASE_URL}/datasets/${runId}/items?token=${APIFY_API_TOKEN}`,
+      `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${APIFY_API_TOKEN}`,
       {
         headers: {
           Authorization: getAuthHeader(),
-        }
+        },
+        timeout: 5000
       }
     );
 
