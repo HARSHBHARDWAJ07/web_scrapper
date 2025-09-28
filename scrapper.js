@@ -1,262 +1,110 @@
 import express from "express";
 import { ApifyClient } from "apify-client";
-import NodeCache from "node-cache";
 
 const app = express();
 app.use(express.json());
 
-// Enhanced configuration
-const CONFIG = {
-  APIFY_TOKEN: process.env.APIFY_TOKEN || process.env.APIFY_API_TOKEN,
-  PORT: process.env.PORT || 3000,
-  CACHE_TTL: 15 * 60, // 15 minutes cache
-  MAX_POSTS: 100,
-  REQUEST_TIMEOUT: 10000, // 10 seconds (local guard for page requests)
-  ACTOR_TIMEOUT: 120_000, // 2 minutes local guard
-  RATE_LIMIT_PER_HOUR: 100, // requests per hour (global)
-};
-
-if (!CONFIG.APIFY_TOKEN) {
-  console.error("❌ APIFY_TOKEN is required in environment variables");
+// Load API token from env
+const APIFY_TOKEN = process.env.APIFY_TOKEN || process.env.APIFY_API_TOKEN;
+if (!APIFY_TOKEN) {
+  console.error("Error: APIFY_TOKEN is not set in environment variables");
   process.exit(1);
 }
 
-const client = new ApifyClient({ token: CONFIG.APIFY_TOKEN });
+// Create Apify client
+const client = new ApifyClient({ token: APIFY_TOKEN });
 
-// NodeCache setup
-const cache = new NodeCache({
-  stdTTL: CONFIG.CACHE_TTL,
-  checkperiod: 60,
-  useClones: false,
-});
-
-// ----------------------
-// Simple global token-bucket rate limiter (per hour)
-// ----------------------
-const RateLimiterSimple = (() => {
-  let tokens = CONFIG.RATE_LIMIT_PER_HOUR;
-  let lastRefill = Date.now();
-
-  function refill() {
-    const now = Date.now();
-    const elapsed = now - lastRefill;
-    if (elapsed >= 60 * 60 * 1000) {
-      tokens = CONFIG.RATE_LIMIT_PER_HOUR;
-      lastRefill = now;
+// Utility: extract hashtags (unique)
+function extractHashtags(text) {
+  if (!text) return [];
+  // regex for hashtags (alphanumeric + underscore)
+  const matches = text.match(/#[A-Za-z0-9_]+/g) || [];
+  // deduplicate
+  const seen = new Set();
+  const result = [];
+  for (const h of matches) {
+    const clean = h.substring(1); // drop '#'
+    if (!seen.has(clean)) {
+      seen.add(clean);
+      result.push(clean);
     }
   }
-
-  return {
-    tryRemoveTokens(n = 1) {
-      refill();
-      if (tokens >= n) {
-        tokens -= n;
-        return true;
-      }
-      return false;
-    },
-    getTokensLeft() {
-      refill();
-      return tokens;
-    },
-  };
-})();
-
-// ----------------------
-// Utilities
-// ----------------------
-function extractHashtags(text) {
-  if (!text || typeof text !== "string") return [];
-  const matches = text.match(/#[\w\u0590-\u05ff]+/g) || [];
-  const s = new Set();
-  for (const m of matches) {
-    s.add(m.slice(1).toLowerCase());
-  }
-  return Array.from(s);
+  return result;
 }
 
-function processPosts(items = [], maxPosts) {
-  if (!Array.isArray(items)) return [];
-  const posts = new Map();
-  let processed = 0;
-
-  for (const item of items) {
-    if (processed >= maxPosts) break;
-    if (!item || item.type !== "Post") continue;
-
-    const caption = item.caption || "";
-    const title =
-      item.title ||
-      (caption.split("\n")[0] ? caption.split("\n")[0].substring(0, 100).trim() : "");
-
-    const key = item.id || item.shortCode || item.timestamp || title;
-    if (posts.has(key)) continue;
-
-    posts.set(key, {
-      id: item.id,
-      title,
-      caption,
-      hashtags: Array.isArray(item.hashtags) ? item.hashtags : extractHashtags(caption),
-      timestamp: item.timestamp || Date.now(),
-    });
-    processed++;
-  }
-  return Array.from(posts.values());
-}
-
-// ----------------------
-// Core scraping function
-// ----------------------
+// Core function: scrape minimal post details for a username
 async function fetchInstagramPosts(username, maxPosts = 25) {
-  const start = Date.now();
-  const normalized = String(username).trim();
-  if (!normalized || normalized.length > 50) throw new Error("Invalid username");
+  const clean = username.trim();
 
-  const postsLimit = Math.min(Math.max(1, Number(maxPosts) || 10), CONFIG.MAX_POSTS);
-  const cacheKey = `instagram:${normalized.toLowerCase()}:${postsLimit}`;
-
-  // cache hit
-  const cached = cache.get(cacheKey);
-  if (cached) {
-    console.log(`✅ Cache hit (${cacheKey})`);
-    return cached;
-  }
-
-  // rate limit check
-  if (!RateLimiterSimple.tryRemoveTokens(1)) {
-    const tokensLeft = RateLimiterSimple.getTokensLeft();
-    console.warn(`⚠️ Rate limit exceeded. tokensLeft=${tokensLeft}`);
-    const err = new Error("Rate limit exceeded");
-    err.code = "RATE_LIMIT";
-    throw err;
-  }
-
+  // Input for the actor
   const input = {
-    directUrls: [`https://www.instagram.com/${normalized}/`],
+    directUrls: [`https://www.instagram.com/${clean}/`],
     resultsType: "posts",
-    resultsLimit: postsLimit,
+    resultsLimit: maxPosts,
     searchType: "user",
     searchLimit: 1,
-    proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-    maxRequestsPerCrawl: Math.min(postsLimit + 5, 50),
-    maxConcurrency: 3,
-    maxRequestRetries: 1,
-    pageTimeout: CONFIG.REQUEST_TIMEOUT,
-    requestHandlerTimeout: CONFIG.REQUEST_TIMEOUT,
-    useChrome: false,
-    extendOutputFunction: `({ item }) => {
-      if (!item || item.type !== "Post") return null;
+    // Use Apify proxy by default (for reliability)
+    proxy: {
+      useApifyProxy: true,
+      apifyProxyGroups: ["RESIDENTIAL"],
+    },
+    // Use a small custom map function to keep minimal data
+    customMapFunction: `({ item }) => {
+      if (item.type !== "Post") return null;
+      const caption = item.caption || "";
+      const hashtags = (caption.match(/#[A-Za-z0-9_]+/g) || []).map(h => h.substring(1));
       return {
-        id: item.id,
-        shortCode: item.shortcode || item.shortCode || item.code,
-        type: item.type,
-        title: item.title || (item.caption || '').split('\\n')[0]?.substring(0,100)?.trim() || '',
-        caption: item.caption || '',
-        timestamp: item.timestamp || item.published_at || null,
-        hashtags: (item.caption || '').match(/#[\\w\\u0590-\\u05ff]+/g)?.map(h => h.substring(1).toLowerCase()) || []
+        title: item.title || caption.split("\\n")[0].substring(0, 100).trim(),
+        caption,
+        hashtags
       };
     }`,
+    // Some performance tuning
+    maxRequestsPerCrawl: 20,
+    maxConcurrency: 3,
+    maxRequestRetries: 1,
+    pageTimeout: 10_000,
   };
 
   try {
-    // call actor and wait until finished
+    // Trigger the actor run
     const run = await client.actor("apify/instagram-scraper").call(input);
+    // List items in the output dataset
+    const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: maxPosts });
 
-    const datasetResult = await client.dataset(run.defaultDatasetId).listItems({
-      limit: postsLimit,
-      clean: true,
-    });
-
-    const items = Array.isArray(datasetResult) ? datasetResult : datasetResult.items || [];
-    const posts = processPosts(items, postsLimit);
-
-    if (posts.length > 0) cache.set(cacheKey, posts);
-
-    const duration = Date.now() - start;
-    console.log(`✅ Fetched ${posts.length} posts for ${normalized} in ${duration}ms`);
+    // Filter nulls & take first valid posts
+    const posts = items
+      .filter(it => it !== null)
+      .map((it) => ({
+        title: it.title || "",
+        caption: it.caption || "",
+        hashtags: Array.isArray(it.hashtags) ? it.hashtags : extractHashtags(it.caption || "")
+      }));
 
     return posts;
   } catch (err) {
-    console.error(`❌ Scraping failed for ${normalized}:`, err && err.message ? err.message : err);
-    if (err.message && err.message.toLowerCase().includes("timeout")) {
-      const e = new Error("Scraping timeout. Please try again later.");
-      e.code = "TIMEOUT";
-      throw e;
-    } else if (err.code === "RATE_LIMIT") {
-      throw err;
-    } else {
-      const e = new Error(`Failed to fetch data: ${err.message || err}`);
-      e.code = "FETCH_ERROR";
-      throw e;
-    }
+    // Throw error upward
+    throw new Error(`Apify error: ${err.statusCode || ""} ${err.message || err.toString()}`);
   }
 }
 
-// ----------------------
-// HTTP endpoints
-// ----------------------
-app.get("/health", (req, res) => {
-  res.json({
-    status: "healthy",
-    timestamp: new Date().toISOString(),
-    cacheStats: cache.getStats(),
-    tokensLeft: RateLimiterSimple.getTokensLeft(),
-  });
-});
-
-app.delete("/cache/:username?", (req, res) => {
-  const { username } = req.params;
-  if (username) {
-    const pattern = new RegExp(`^instagram:${username.toLowerCase()}:`);
-    const keys = cache.keys().filter((k) => pattern.test(k));
-    keys.forEach((k) => cache.del(k));
-    return res.json({ cleared: keys.length, keys });
-  }
-  const count = cache.keys().length;
-  cache.flushAll();
-  return res.json({ cleared: count, message: "All cache cleared" });
-});
-
-app.post("/", async (req, res) => {
+// API route
+app.post("/scrape", async (req, res) => {
   try {
     const { username, maxPosts } = req.body;
-    if (!username || typeof username !== "string" || username.trim().length === 0) {
-      return res.status(400).json({
-        error: "Valid username is required",
-        details: "Username must be a non-empty string",
-      });
+    if (!username) {
+      return res.status(400).json({ error: "username is required" });
     }
-    const limit = Math.min(Math.max(1, parseInt(maxPosts) || 25), CONFIG.MAX_POSTS);
-    const posts = await fetchInstagramPosts(username.trim(), limit);
-    return res.json({
-      username: username.trim(),
-      posts,
-      count: posts.length,
-      cached: false,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("Scraping endpoint error:", err);
-    const statusCode =
-      (err.code === "TIMEOUT" && 408) || (err.code === "RATE_LIMIT" && 429) || 500;
-    return res.status(statusCode).json({ error: err.message, details: "See server logs" });
+    const limit = typeof maxPosts === "number" && maxPosts > 0 ? maxPosts : 25;
+    const posts = await fetchInstagramPosts(username, limit);
+    return res.json({ username, posts });
+  } catch (e) {
+    console.error("Scrape failed:", e);
+    return res.status(500).json({ error: e.message || "Unknown error" });
   }
 });
 
-// Graceful shutdown
-process.on("SIGTERM", () => {
-  console.log("SIGTERM received, shutting down gracefully");
-  try {
-    cache.flushAll();
-  } catch (e) {}
-  process.exit(0);
-});
-
-// Start server
-const server = app.listen(CONFIG.PORT, () => {
-  console.log(`🚀 Server running on port ${CONFIG.PORT}`);
-  console.log(`💾 Cache enabled with ${CONFIG.CACHE_TTL}s TTL`);
-  console.log(`📊 Rate limiting: ${CONFIG.RATE_LIMIT_PER_HOUR} req/hour`);
-});
-
-export default app;
+const PORT = process.env.PORT || 3000;
+if (import.meta.url === `file://${process.argv[1]}`) {
+  app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+}
