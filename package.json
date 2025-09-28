@@ -1,25 +1,42 @@
 {
   "name": "project_scrapper_js",
   "version": "1.0.0",
-  "description": "Instagram scraper using Zyte API",
+  "description": "Instagram scraper using Apify API",
   "main": "scrapper.js",
   "type": "module",
   "scripts": {
     "start": "node scrapper.js",
+    "dev": "node --watch scrapper.js",
     "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [
     "scraper",
-    "zyte",
+    "apify",
     "instagram",
-    "nodejs"
+    "nodejs",
+    "social-media"
   ],
+
   "author": "Harsh Bhardwaj",
   "license": "ISC",
   "dependencies": {
+    "apify-client": "^2.9.3",
     "axios": "^1.7.7",
     "buffer": "^6.0.3",
-    "express": "^4.21.1",
-    "apify-client": "^2.9.3"
-  }
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/project_scrapper_js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/project_scrapper_js/issues"
+  },
+  "homepage": "https://github.com/yourusername/project_scrapper_js#readme"
 }
