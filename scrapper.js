@@ -5,7 +5,7 @@ import pino from "pino";
 
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
 
-const APIFY_TOKEN = process.env.APIFY_TOKEN;
+const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
 if (!APIFY_TOKEN) {
   log.error("APIFY_TOKEN not set in env");
   process.exit(1);
