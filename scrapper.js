@@ -11,8 +11,8 @@ const CONFIG = {
   PORT: process.env.PORT || 3000,
   CACHE_TTL: 15 * 60, // 15 minutes cache
   MAX_POSTS: 100,
-  REQUEST_TIMEOUT: 10000, // 10 seconds (local guard)
-  ACTOR_TIMEOUT: 30_000, // 30s actor-level guard (Promise.race)
+  REQUEST_TIMEOUT: 10000, // 10 seconds (local guard for page timeouts)
+  ACTOR_TIMEOUT: 120_000, // 2 minutes actor-level timeout
   RATE_LIMIT_PER_HOUR: 100, // requests per hour (global)
 };
 
@@ -33,13 +33,10 @@ const cache = new NodeCache({
 // ----------------------
 // Simple global token-bucket rate limiter (per hour)
 // ----------------------
-// This is a small in-memory global limiter. Works for a single-instance deployment.
-// For multi-instance deployments use a centralized limiter (Redis / external).
 const RateLimiterSimple = (() => {
   let tokens = CONFIG.RATE_LIMIT_PER_HOUR;
   let lastRefill = Date.now();
 
-  // refill once per hour proportionally
   function refill() {
     const now = Date.now();
     const elapsed = now - lastRefill;
@@ -92,7 +89,6 @@ function processPosts(items = [], maxPosts) {
       item.title ||
       (caption.split("\n")[0] ? caption.split("\n")[0].substring(0, 100).trim() : "");
 
-    // canonical dedupe key
     const key = item.id || item.shortCode || item.timestamp || title;
     if (posts.has(key)) continue;
 
@@ -119,14 +115,12 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
   const postsLimit = Math.min(Math.max(1, Number(maxPosts) || 10), CONFIG.MAX_POSTS);
   const cacheKey = `instagram:${normalized.toLowerCase()}:${postsLimit}`;
 
-  // cache hit
   const cached = cache.get(cacheKey);
   if (cached) {
     console.log(`✅ Cache hit (${cacheKey})`);
     return cached;
   }
 
-  // Rate limit check (global)
   if (!RateLimiterSimple.tryRemoveTokens(1)) {
     const tokensLeft = RateLimiterSimple.getTokensLeft();
     console.warn(`⚠️ Rate limit exceeded. tokensLeft=${tokensLeft}`);
@@ -135,7 +129,6 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
     throw err;
   }
 
-  // Build input for actor - use extendOutputFunction to return minimal fields
   const input = {
     directUrls: [`https://www.instagram.com/${normalized}/`],
     resultsType: "posts",
@@ -143,14 +136,12 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
     searchType: "user",
     searchLimit: 1,
     proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-    // Lightweight actor tuning
     maxRequestsPerCrawl: Math.min(postsLimit + 5, 50),
     maxConcurrency: 3,
     maxRequestRetries: 1,
     pageTimeout: CONFIG.REQUEST_TIMEOUT,
     requestHandlerTimeout: CONFIG.REQUEST_TIMEOUT,
     useChrome: false,
-    // Ask actor to return only minimal fields (extendOutputFunction)
     extendOutputFunction: `({ item }) => {
       if (!item || item.type !== "Post") return null;
       return {
@@ -166,27 +157,18 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
   };
 
   try {
-    // call actor but guard with a local timeout too (actor sometimes hangs)
-    const actorPromise = client.actor("apify/instagram-scraper").call(input);
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Actor call timeout")), CONFIG.ACTOR_TIMEOUT)
-    );
+    const run = await client.actor("apify/instagram-scraper").call(input, {
+      waitForFinish: CONFIG.ACTOR_TIMEOUT / 1000, // convert ms → seconds
+    });
 
-    const run = await Promise.race([actorPromise, timeoutPromise]);
-
-    // retrieve dataset items (limit = postsLimit)
     const datasetResult = await client.dataset(run.defaultDatasetId).listItems({
       limit: postsLimit,
       clean: true,
     });
 
-    // datasetResult may be { items, continuationToken, ... } or an array depending on version
     const items = Array.isArray(datasetResult) ? datasetResult : datasetResult.items || [];
-
-    // process minimal items
     const posts = processPosts(items, postsLimit);
 
-    // cache successful result (only when posts present)
     if (posts.length > 0) cache.set(cacheKey, posts);
 
     const duration = Date.now() - start;
@@ -194,7 +176,6 @@ async function fetchInstagramPosts(username, maxPosts = 25) {
 
     return posts;
   } catch (err) {
-    // map common errors to friendly messages
     console.error(`❌ Scraping failed for ${normalized}:`, err && err.message ? err.message : err);
     if (err.message && err.message.toLowerCase().includes("timeout")) {
       const e = new Error("Scraping timeout. Please try again later.");
@@ -278,4 +259,3 @@ const server = app.listen(CONFIG.PORT, () => {
 });
 
 export default app;
-
