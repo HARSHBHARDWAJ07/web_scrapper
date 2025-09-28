@@ -15,7 +15,7 @@ class FastInstagramScraper {
      * @param {string} username - Instagram username (no @, just plain name)
      * @param {number} maxPosts - Number of posts to fetch
      */
-    async getPostDetails(username, maxPosts = 12) {
+    async getPostDetails(username, maxPosts = 42) {
         const cleanUsername = username.trim();
 
         const input = {
