@@ -1,4 +1,10 @@
 import { ApifyClient } from 'apify-client';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// ES module equivalent of __filename and __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
  * Ultra-optimized Instagram Scraper for Single User
@@ -245,7 +251,8 @@ export {
     quickGetPosts 
 };
 
-// Run example if executed directly
-if (require.main === module) {
+// ES module way to check if file is run directly
+// In ES modules, we check if import.meta.url matches the main module
+if (import.meta.url === `file://${process.argv[1]}`) {
     example();
 }
