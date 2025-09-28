@@ -13,10 +13,9 @@ if (!APIFY_TOKEN) {
 const client = new ApifyClient({ token: APIFY_TOKEN });
 
 const PORT = process.env.PORT || 3000;
-const WAIT_SECS = 12;
 const DEFAULT_MAX_POSTS = 25;
 
-// Utility: unique hashtags
+// Utility: extract unique hashtags
 function extractHashtags(text) {
   if (!text) return [];
   const matches = text.match(/#[A-Za-z0-9_]+/g) || [];
@@ -59,18 +58,24 @@ async function fetchInstagramPosts(username, maxPosts = DEFAULT_MAX_POSTS) {
     }`
   };
 
-  // Call actor with limited wait
-  const run = await client.actor("apify/instagram-scraper").call(input, {
-    waitForFinish: WAIT_SECS,
-    fetchOutput: true
-  });
+  // Start actor run
+  const run = await client.actor("apify/instagram-scraper").call(input);
 
-  const datasetId = run?.defaultDatasetId || run?.data?.defaultDatasetId;
-  let items = [];
-  if (datasetId) {
-    const res = await client.dataset(datasetId).listItems({ limit: maxPosts });
-    items = res.items || [];
+  // Poll until finished
+  let finishedRun;
+  while (true) {
+    finishedRun = await client.run(run.id).get();
+    if (["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"].includes(finishedRun.status)) break;
+    await new Promise((r) => setTimeout(r, 5000)); // wait 5s between polls
   }
+
+  if (finishedRun.status !== "SUCCEEDED") {
+    throw new Error(`Apify run failed with status ${finishedRun.status}`);
+  }
+
+  // Fetch dataset items
+  const datasetId = finishedRun.defaultDatasetId;
+  const { items } = await client.dataset(datasetId).listItems({ limit: maxPosts });
 
   return items
     .filter(Boolean)
@@ -107,4 +112,3 @@ app.post("/", async (req, res) => {
 if (import.meta.url === `file://${process.argv[1]}`) {
   app.listen(PORT, () => log.info(`Server running on port ${PORT}`));
 }
-
