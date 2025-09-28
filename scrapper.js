@@ -1,17 +1,3 @@
-const express = require("express");
-const axios = require("axios");
-
-const app = express();
-app.use(express.json());
-
-const ZYTE_API_KEY = process.env.ZYTE_API_KEY || "REPLACE_WITH_YOUR_ZYTE_KEY";
-const ZYTE_BASE_URL = process.env.ZYTE_BASE_URL || "https://api.zyte.com/v1";
-
-function getAuthHeader() {
-  const token = Buffer.from(`${ZYTE_API_KEY}:`).toString("base64");
-  return `Basic ${token}`;
-}
-
 async function scrapeInstagramPosts(username) {
   if (!ZYTE_API_KEY || ZYTE_API_KEY === "REPLACE_WITH_YOUR_ZYTE_KEY") {
     throw new Error("ZYTE_API_KEY is not set");
@@ -30,11 +16,7 @@ async function scrapeInstagramPosts(username) {
       `${ZYTE_BASE_URL}/extract`,
       {
         url: profileUrl,
-        // Request the raw HTML body as base64 so we can parse it
-        browserHtml: true,
-        httpResponseBody: true,
-        // We might want to autoExtract as well, though Instagram is not a “product/article” type
-        // autoExtract: true,
+        browserHtml: true // ✅ only use browser rendering
       },
       {
         headers: {
@@ -45,10 +27,8 @@ async function scrapeInstagramPosts(username) {
       }
     );
   } catch (err) {
-    // More informative error
     const resp = err.response;
     if (resp) {
-      // err.response.data may itself be an object
       throw new Error(
         `Zyte extract error: status ${resp.status}, data = ${JSON.stringify(resp.data)}`
       );
@@ -58,7 +38,7 @@ async function scrapeInstagramPosts(username) {
 
   const data = extractResp.data;
 
-  // Try first: if Zyte did automatic extraction and has `data.extracted.posts`
+  // If Zyte did automatic extraction and has posts
   if (data.extracted && Array.isArray(data.extracted.posts)) {
     return data.extracted.posts.map((p, idx) => {
       const caption = p.caption || "";
@@ -74,46 +54,32 @@ async function scrapeInstagramPosts(username) {
     });
   }
 
-  // Fallback: parse HTML from browserHtml or httpResponseBody
+  // Otherwise parse from HTML
   let html = "";
   if (data.browserHtml) {
     html = Buffer.from(data.browserHtml, "base64").toString("utf-8");
-  } else if (data.httpResponseBody) {
-    html = Buffer.from(data.httpResponseBody, "base64").toString("utf-8");
-  } else if (data.data) {
-    html = data.data;  // sometimes Zyte returns HTML in `data` field
   }
 
   if (!html) {
-    // nothing to parse
     return [];
   }
 
-  // Parse the Instagram sharedData JSON inside HTML
+  // Parse the Instagram sharedData JSON
   let posts = [];
   try {
     const m = html.match(/window\._sharedData\s*=\s*(\{.*?\});/s);
     if (m) {
       const obj = JSON.parse(m[1]);
       const edges =
-        obj.entry_data &&
-        obj.entry_data.ProfilePage &&
-        obj.entry_data.ProfilePage[0] &&
-        obj.entry_data.ProfilePage[0].graphql &&
-        obj.entry_data.ProfilePage[0].graphql.user &&
-        obj.entry_data.ProfilePage[0].graphql.user.edge_owner_to_timeline_media &&
-        obj.entry_data.ProfilePage[0].graphql.user.edge_owner_to_timeline_media.edges;
+        obj.entry_data?.ProfilePage?.[0]?.graphql?.user?.edge_owner_to_timeline_media?.edges;
 
       if (Array.isArray(edges)) {
         edges.forEach((edge, idx) => {
           const node = edge.node || {};
-          const captionEdge =
-            node.edge_media_to_caption && node.edge_media_to_caption.edges;
+          const captionEdge = node.edge_media_to_caption?.edges;
           const caption =
             (Array.isArray(captionEdge) &&
-              captionEdge[0] &&
-              captionEdge[0].node &&
-              captionEdge[0].node.text) ||
+              captionEdge[0]?.node?.text) ||
             "";
           const title = caption
             ? String(caption).split("\n")[0].substring(0, 100).trim()
@@ -140,28 +106,3 @@ async function scrapeInstagramPosts(username) {
 
   return posts;
 }
-
-// API route
-app.post("/", async (req, res) => {
-  try {
-    const { username } = req.body;
-    if (!username) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Username is required" });
-    }
-    const posts = await scrapeInstagramPosts(username);
-    return res.status(200).json({
-      status: "success",
-      data: { username, posts },
-    });
-  } catch (err) {
-    console.error("Scrape error:", err);
-    return res
-      .status(500)
-      .json({ status: "error", message: err.message });
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
