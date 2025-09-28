@@ -1,32 +1,39 @@
 {
   "name": "project_scrapper_js",
-  "version": "1.0.0",
-  "description": "Instagram scraper using Apify API",
+  "version": "2.0.0",
+  "description": "High-performance Instagram scraper using Apify API with caching and rate limiting",
   "main": "scrapper.js",
   "type": "module",
   "scripts": {
     "start": "node scrapper.js",
     "dev": "node --watch scrapper.js",
-    "test": "echo \"No tests specified\" && exit 0"
+    "prod": "NODE_ENV=production node scrapper.js",
+    "test": "echo \"No tests specified\" && exit 0",
+    "benchmark": "node benchmark.js",
+    "lint": "eslint scrapper.js"
   },
   "keywords": [
     "scraper",
     "apify",
     "instagram",
     "nodejs",
-    "social-media"
+    "social-media",
+    "performance",
+    "caching",
+    "rate-limiting"
   ],
-
   "author": "Harsh Bhardwaj",
   "license": "ISC",
   "dependencies": {
     "apify-client": "^2.9.3",
-    "axios": "^1.7.7",
-    "buffer": "^6.0.3",
-    "express": "^4.21.1"
+    "express": "^4.21.1",
+    "node-cache": "^5.1.2",
+    "limiter": "^2.1.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "eslint": "^8.57.0",
+    "autocannon": "^7.10.0"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -38,5 +45,9 @@
   "bugs": {
     "url": "https://github.com/yourusername/project_scrapper_js/issues"
   },
-  "homepage": "https://github.com/yourusername/project_scrapper_js#readme"
+  "homepage": "https://github.com/yourusername/project_scrapper_js#readme",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/yourusername"
+  }
 }
