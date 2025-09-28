@@ -2,7 +2,7 @@ import express from "express";
 import { ApifyClient } from "apify-client";
 
 /**
- * Ultra-optimized Instagram Scraper for Single User
+ * Instagram Scraper using Apify
  * Extracts ONLY: title, caption, hashtags
  */
 class FastInstagramScraper {
@@ -11,13 +11,12 @@ class FastInstagramScraper {
     }
 
     /**
-     * Main method - Gets posts with only title, caption, hashtags
-     * @param {string} username - Instagram username (without @)
-     * @param {number} maxPosts - Maximum posts to fetch
-     * @returns {Promise<Object>}
+     * Get Instagram posts for a username
+     * @param {string} username - Instagram username (no @, just plain name)
+     * @param {number} maxPosts - Number of posts to fetch
      */
     async getPostDetails(username, maxPosts = 12) {
-        const cleanUsername = username.replace("@", "").trim().toLowerCase();
+        const cleanUsername = username.trim();
 
         const input = {
             directUrls: [`https://www.instagram.com/${cleanUsername}/`],
@@ -40,25 +39,17 @@ class FastInstagramScraper {
         };
 
         try {
-            const startTime = Date.now();
-
             const run = await this.client.actor("apify/instagram-scraper").call(input);
             const { items } = await this.client.dataset(run.defaultDatasetId).listItems();
 
             const posts = this.processMinimalData(items);
 
-            const endTime = Date.now();
-
             return {
-                status: "success",
                 username: cleanUsername,
-                postCount: posts.length,
-                posts: posts,
-                executionTime: `${(endTime - startTime) / 1000}s`,
+                posts,
             };
         } catch (error) {
             return {
-                status: "error",
                 username: cleanUsername,
                 error: error.message,
                 posts: [],
@@ -79,8 +70,8 @@ class FastInstagramScraper {
 
             posts.push({
                 title: item.title || this.generateTitle(caption) || "Untitled Post",
-                caption: caption,
-                hashtags: hashtags,
+                caption,
+                hashtags,
             });
         }
         return posts;
@@ -100,42 +91,7 @@ class FastInstagramScraper {
     }
 }
 
-// Helper function
-export async function getInstagramPosts(username, apiToken, maxPosts = 12) {
-    const scraper = new FastInstagramScraper(apiToken);
-    return await scraper.getPostDetails(username, maxPosts);
-}
-
-// Simple one-liner
-export async function quickGetPosts(username, apiToken, maxPosts = 12) {
-    try {
-        const client = new ApifyClient({ token: apiToken });
-
-        const run = await client.actor("apify/instagram-scraper").call({
-            directUrls: [`https://www.instagram.com/${username}/`],
-            resultsType: "posts",
-            resultsLimit: maxPosts,
-            proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-        });
-
-        const { items } = await client.dataset(run.defaultDatasetId).listItems();
-
-        return items.map((item) => ({
-            title: item.title || item.caption?.substring(0, 50) || "No title",
-            caption: item.caption || "",
-            hashtags: (item.caption?.match(/#[\w]+/g) || []).filter(
-                (v, i, a) => a.indexOf(v) === i
-            ),
-        }));
-    } catch (error) {
-        console.error("Error:", error.message);
-        return [];
-    }
-}
-
-// ================================
-// Express API Setup
-// ================================
+// Express API
 const app = express();
 app.use(express.json());
 
@@ -162,14 +118,7 @@ app.post("/", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-// Run example if executed directly
+// Run server directly if called via `node scrapper.js`
 if (import.meta.url === `file://${process.argv[1]}`) {
     app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
-
-    // Example fetch
-    const demo = new FastInstagramScraper(API_TOKEN);
-    demo.getPostDetails("instagram", 5).then((r) =>
-        console.log("Example fetch result:", r)
-    );
 }
-
