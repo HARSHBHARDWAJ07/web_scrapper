@@ -17,7 +17,12 @@ async function scrapeInstagramPosts(username) {
     throw new Error("ZYTE_API_KEY is not set");
   }
 
-  const profileUrl = `https://www.instagram.com/${username}/`;
+  const cleanUsername = String(username).replace("@", "").trim();
+  if (!cleanUsername) {
+    throw new Error("Invalid username");
+  }
+
+  const profileUrl = `https://www.instagram.com/${cleanUsername}/`;
 
   let extractResp;
   try {
@@ -25,29 +30,113 @@ async function scrapeInstagramPosts(username) {
       `${ZYTE_BASE_URL}/extract`,
       {
         url: profileUrl,
-        autoExtract: true // <--- Let Zyte do the extraction
+        // Request the raw HTML body as base64 so we can parse it
+        browserHtml: true,
+        httpResponseBody: true,
+        // We might want to autoExtract as well, though Instagram is not a “product/article” type
+        // autoExtract: true,
       },
       {
         headers: {
           Authorization: getAuthHeader(),
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        timeout: 60000
+        timeout: 60000,
       }
     );
   } catch (err) {
-    throw new Error(err.response?.data || err.message);
+    // More informative error
+    const resp = err.response;
+    if (resp) {
+      // err.response.data may itself be an object
+      throw new Error(
+        `Zyte extract error: status ${resp.status}, data = ${JSON.stringify(resp.data)}`
+      );
+    }
+    throw new Error(`Zyte extract network error: ${err.message}`);
   }
 
   const data = extractResp.data;
 
-  // Zyte returns structured data, e.g. data.extracted.posts
-  const posts = (data.extracted?.posts || []).map((p) => ({
-    title: p.caption ? p.caption.split("\n")[0].substring(0, 100) : "Post",
-    url: p.url || "",
-    caption: p.caption || "",
-    hashtags: p.hashtags || []
-  }));
+  // Try first: if Zyte did automatic extraction and has `data.extracted.posts`
+  if (data.extracted && Array.isArray(data.extracted.posts)) {
+    return data.extracted.posts.map((p, idx) => {
+      const caption = p.caption || "";
+      const title = caption
+        ? String(caption).split("\n")[0].substring(0, 100).trim()
+        : `Post ${idx + 1}`;
+      return {
+        title,
+        url: p.url || "",
+        caption,
+        hashtags: Array.isArray(p.hashtags) ? p.hashtags : [],
+      };
+    });
+  }
+
+  // Fallback: parse HTML from browserHtml or httpResponseBody
+  let html = "";
+  if (data.browserHtml) {
+    html = Buffer.from(data.browserHtml, "base64").toString("utf-8");
+  } else if (data.httpResponseBody) {
+    html = Buffer.from(data.httpResponseBody, "base64").toString("utf-8");
+  } else if (data.data) {
+    html = data.data;  // sometimes Zyte returns HTML in `data` field
+  }
+
+  if (!html) {
+    // nothing to parse
+    return [];
+  }
+
+  // Parse the Instagram sharedData JSON inside HTML
+  let posts = [];
+  try {
+    const m = html.match(/window\._sharedData\s*=\s*(\{.*?\});/s);
+    if (m) {
+      const obj = JSON.parse(m[1]);
+      const edges =
+        obj.entry_data &&
+        obj.entry_data.ProfilePage &&
+        obj.entry_data.ProfilePage[0] &&
+        obj.entry_data.ProfilePage[0].graphql &&
+        obj.entry_data.ProfilePage[0].graphql.user &&
+        obj.entry_data.ProfilePage[0].graphql.user.edge_owner_to_timeline_media &&
+        obj.entry_data.ProfilePage[0].graphql.user.edge_owner_to_timeline_media.edges;
+
+      if (Array.isArray(edges)) {
+        edges.forEach((edge, idx) => {
+          const node = edge.node || {};
+          const captionEdge =
+            node.edge_media_to_caption && node.edge_media_to_caption.edges;
+          const caption =
+            (Array.isArray(captionEdge) &&
+              captionEdge[0] &&
+              captionEdge[0].node &&
+              captionEdge[0].node.text) ||
+            "";
+          const title = caption
+            ? String(caption).split("\n")[0].substring(0, 100).trim()
+            : `Post ${idx + 1}`;
+          const hashtags = (String(caption).match(/#([A-Za-z0-9_]+)/g) || []).map(
+            (h) => h.substring(1)
+          );
+          const shortcode = node.shortcode;
+          const postUrl = shortcode
+            ? `https://www.instagram.com/p/${shortcode}/`
+            : "";
+          posts.push({
+            title,
+            url: postUrl,
+            caption,
+            hashtags,
+          });
+        });
+      }
+    }
+  } catch (parseErr) {
+    console.error("Error parsing HTML:", parseErr);
+  }
 
   return posts;
 }
@@ -56,17 +145,21 @@ async function scrapeInstagramPosts(username) {
 app.post("/", async (req, res) => {
   try {
     const { username } = req.body;
-    if (!username) return res.status(400).json({ status: "error", message: "Username is required" });
-
+    if (!username) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Username is required" });
+    }
     const posts = await scrapeInstagramPosts(username);
-
     return res.status(200).json({
       status: "success",
-      data: { username, posts }
+      data: { username, posts },
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ status: "error", message: err.message });
+    console.error("Scrape error:", err);
+    return res
+      .status(500)
+      .json({ status: "error", message: err.message });
   }
 });
 
