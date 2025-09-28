@@ -33,7 +33,7 @@ function extractHashtags(text) {
 }
 
 // Core function: scrape minimal post details for a username
-async function fetchInstagramPosts(username, maxPosts = 10) {
+async function fetchInstagramPosts(username, maxPosts = 25) {
   const clean = username.trim();
 
   // Input for the actor
