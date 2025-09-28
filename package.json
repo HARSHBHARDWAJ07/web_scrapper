@@ -1,15 +1,23 @@
 {
   "name": "project_scrapper_js",
   "version": "1.0.0",
-  "description": "",
+  "description": "Instagram scraper using Zyte API",
   "main": "scrapper.js",
+  "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node scrapper.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "scraper",
+    "zyte",
+    "instagram",
+    "nodejs"
+  ],
+  "author": "Harsh Bhardwaj",
   "license": "ISC",
   "dependencies": {
-    "axios": "^1.12.2"
+    "axios": "^1.7.7",
+    "buffer": "^6.0.3"
   }
 }
