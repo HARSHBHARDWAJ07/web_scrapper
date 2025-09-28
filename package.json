@@ -1,21 +1,22 @@
 {
   "name": "project_scrapper_js",
-  "version": "2.0.0",
-  "description": "High-performance Instagram scraper using Apify API with caching and rate limiting",
-  "main": "scrapper.js",
+  "version": "2.1.0",
+  "description": "High-performance Instagram scraper using Apify API with Express, caching, and rate limiting",
+  "main": "server.mjs",
   "type": "module",
   "scripts": {
-    "start": "node scrapper.js",
-    "dev": "node --watch scrapper.js",
-    "prod": "NODE_ENV=production node scrapper.js",
+    "start": "node server.mjs",
+    "dev": "nodemon --watch server.mjs --ext mjs,js,json",
+    "prod": "NODE_ENV=production node server.mjs",
     "test": "echo \"No tests specified\" && exit 0",
-    "benchmark": "node benchmark.js",
-    "lint": "eslint scrapper.js"
+    "benchmark": "autocannon -c 50 -d 15 http://localhost:3000/scrape",
+    "lint": "eslint . --ext .js,.mjs"
   },
   "keywords": [
     "scraper",
     "apify",
     "instagram",
+    "express",
     "nodejs",
     "social-media",
     "performance",
@@ -27,13 +28,14 @@
   "dependencies": {
     "apify-client": "^2.9.3",
     "express": "^4.21.1",
+    "pino": "^9.4.0",
     "node-cache": "^5.1.2",
     "limiter": "^2.1.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1",
+    "nodemon": "^3.1.0",
     "eslint": "^8.57.0",
-    "autocannon": "^7.10.0"
+    "autocannon": "^7.14.0"
   },
   "engines": {
     "node": ">=18.0.0"
